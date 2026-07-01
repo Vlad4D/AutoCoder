@@ -1,0 +1,30 @@
+# .autocoderignore — files AutoCoder must never read into context or send to the
+# LLM provider. Uses gitignore-style syntax. AutoCoder also applies your
+# .gitignore and a built-in set of secret/credential patterns automatically;
+# the entries here are additive.
+
+# Secrets / credentials (also covered by built-in defaults)
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa*
+id_ed25519*
+*.keystore
+credentials
+credentials.json
+.npmrc
+.netrc
+secrets.*
+*.secret
+
+# Large/binary build artifacts you don't want pulled into context
+build/
+out/
+dist/
+*.exe
+*.dll
+*.lib
+*.pdb

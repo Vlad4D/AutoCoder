@@ -1,0 +1,31 @@
+{
+  "version": 4,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Visual Studio 2022 (Qt prebuilt)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/default",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64"
+      }
+    },
+    {
+      "name": "ninja",
+      "displayName": "Ninja Debug (Qt prebuilt)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.8.3/msvc2022_64"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "default", "configurePreset": "default", "configuration": "Debug" },
+    { "name": "release", "configurePreset": "default", "configuration": "Release" },
+    { "name": "ninja", "configurePreset": "ninja" }
+  ]
+}

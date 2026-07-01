@@ -1,0 +1,10 @@
+# BuildConfig stamp script -- invoked by CMake custom target at build time.
+# Writes current UTC date/time into BuildConfig.h.
+
+set(BUILD_CONFIG_INPUT  "@CMAKE_SOURCE_DIR@/src/BuildConfig.h.in")
+set(BUILD_CONFIG_OUTPUT "@CMAKE_BINARY_DIR@/generated/BuildConfig.h")
+
+string(TIMESTAMP BUILD_DATE "%Y-%m-%d" UTC)
+string(TIMESTAMP BUILD_TIME "%H:%M:%S" UTC)
+
+configure_file("${BUILD_CONFIG_INPUT}" "${BUILD_CONFIG_OUTPUT}" @ONLY)

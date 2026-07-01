@@ -1,0 +1,64 @@
+# --- Build outputs ---
+build/
+out/
+vcpkg_installed/
+
+# --- CMake (in-source safety net) ---
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+install_manifest.txt
+_deps/
+CMakeUserPresets.json
+
+# --- Compiled binaries / object files ---
+*.exe
+*.dll
+*.pdb
+*.obj
+*.ilk
+*.lib
+*.exp
+*.so
+*.dylib
+*.a
+*.o
+
+# --- IDE / editor ---
+.vs/
+.vscode/
+.idea/
+.cache/
+*.user
+*.user.*
+*~
+*.bak
+*.swp
+*.tmp
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+
+# --- Agent test output ---
+# bigtest harness results and manual agent scratch sandboxes (work dirs and
+# unit-test output live under %TEMP% and never touch the repo).
+bigtest/results/
+bigtest/user_test/
+tmp/
+
+# --- Excluded from the public repo ---
+# Commercial store listing (kept locally, not published).
+microsoft_store_description.md
+# Local Claude Code settings (personal, machine-specific).
+.claude/settings.local.json
+# Local screenshot scratch, except the two committed README assets.
+screenshots/*
+!screenshots/what_is_this.png
+!screenshots/add_comments.png

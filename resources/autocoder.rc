@@ -1,0 +1,6 @@
+// AutoCoder application icon resource
+
+#include <windows.h>
+
+// Icon - used as the application icon
+IDI_APPICON   ICON   "autocoder.ico"

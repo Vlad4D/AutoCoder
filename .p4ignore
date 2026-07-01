@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------
+# .p4ignore — Perforce ignore rules for AutoCoder
+# Prevents build artifacts, IDE files, and OS cruft from
+# appearing in `p4 status` or `p4 add`.
+# ---------------------------------------------------------------
+
+# --- Build outputs ---
+build/
+out/
+vcpkg_installed/
+
+# --- CMake ---
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+install_manifest.txt
+_deps/
+CMakeUserPresets.json
+
+# --- Compiled binaries / object files ---
+*.exe
+*.dll
+*.pdb
+*.obj
+*.ilk
+*.lib
+*.exp
+*.so
+*.dylib
+*.a
+*.o
+
+# --- IDE / editor ---
+.vs/
+.vscode/
+.idea/
+.cache/
+*.user
+*.user.*
+*~
+*.bak
+*.swp
+*.tmp
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+
+# --- Agent test output ---
+# bigtest harness runs (transcripts, metrics.json, produced artifacts such
+# as out.bmp/out.png) and manual agent scratch sandboxes inside the repo.
+# Unit tests (autocoder_tests) and the bigtest WORK dirs write under %TEMP%
+# and never touch the workspace; only these result/scratch dirs land here.
+bigtest/results/
+bigtest/user_test/
+tmp/
