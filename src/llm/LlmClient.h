@@ -26,6 +26,13 @@ public:
     void setBaseUrl(QString url);            // default: "https://api.deepseek.com"
     void setMaxTokens(int tokens);            // used by providers that require max_tokens
 
+    // Sampling temperature sent with every request. Negative (the default)
+    // means "unset" -- the field is omitted and the provider default applies.
+    // DeepSeek's default is 1.0, which is poor for coding; the app configures
+    // 0.0 for it. Ignored for deepseek-reasoner models (which reject
+    // sampling parameters).
+    void setTemperature(double t);
+
     // Non-streaming: emits responseReceived once with the full assistant message.
     void sendOnce(nlohmann::json messages, nlohmann::json tools = {});
 
@@ -41,6 +48,12 @@ public:
     // system block plus the last block of the final two messages. Pure JSON
     // transform; public so the offline tests can exercise it directly.
     static void addClaudeCacheBreakpoints(nlohmann::json& body);
+
+    // Request-body builders. Pure functions of the client configuration;
+    // public so the offline tests can exercise them directly (same precedent
+    // as addClaudeCacheBreakpoints).
+    nlohmann::json buildOpenAiBody(nlohmann::json messages, nlohmann::json tools, bool streaming) const;
+    nlohmann::json buildClaudeBody(nlohmann::json messages, nlohmann::json tools, bool streaming) const;
 
 signals:
     // Non-streaming: full assistant message (choices[0].message).
@@ -69,8 +82,6 @@ private:
     void processClaudeSsePayload(const QByteArray& payload);
     void emitFinalStreamMessage();
     void mergeAndEmitUsage(const nlohmann::json& usage);
-    nlohmann::json buildOpenAiBody(nlohmann::json messages, nlohmann::json tools, bool streaming) const;
-    nlohmann::json buildClaudeBody(nlohmann::json messages, nlohmann::json tools, bool streaming) const;
     nlohmann::json claudeMessageToOpenAi(const nlohmann::json& message) const;
 
     QNetworkAccessManager nm_;
@@ -78,7 +89,8 @@ private:
     QString apiKey_;
     QString model_   = "deepseek-chat";
     QString baseUrl_ = "https://api.deepseek.com";
-    int maxTokens_ = 8192;
+    int maxTokens_ = 16384;      // clamped per-model in the body builders
+    double temperature_ = -1.0;  // <0 = unset (provider default)
 
     // Any in-flight reply (streaming or non-streaming), so abort() can cancel it.
     QPointer<QNetworkReply> pendingReply_;

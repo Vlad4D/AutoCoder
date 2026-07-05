@@ -1,6 +1,9 @@
 #include "SystemPrompt.h"
 
+#include <algorithm>
 #include <array>
+#include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string_view>
 
@@ -43,6 +46,42 @@ std::optional<std::filesystem::path> findProjectGuidanceFile(
         }
     }
     return std::nullopt;
+}
+
+std::string readGuidanceCapped(const std::filesystem::path& file,
+                               std::size_t maxBytes) {
+    std::string content;
+    try {
+        std::ifstream in(file, std::ios::binary);
+        if (!in) return {};
+        content.assign(std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>());
+    } catch (...) {
+        return {};
+    }
+    // Normalize line endings so the embedded text (and therefore the cached
+    // prompt prefix) does not depend on how the file was checked out.
+    content.erase(std::remove(content.begin(), content.end(), '\r'),
+                  content.end());
+    if (content.size() > maxBytes) {
+        std::size_t cut = content.rfind('\n', maxBytes);
+        if (cut == std::string::npos) {
+            // No line break in the first maxBytes: cut at maxBytes, but back
+            // off to a UTF-8 code-point boundary so we never split a
+            // multi-byte sequence. Invalid UTF-8 would make the JSON dump of
+            // the request body / saved conversation throw and the whole
+            // conversation unsendable. Continuation bytes are 0b10xxxxxx.
+            cut = maxBytes;
+            while (cut > 0
+                   && (static_cast<unsigned char>(content[cut]) & 0xC0) == 0x80) {
+                --cut;
+            }
+        }
+        content.resize(cut);
+        content += "\n[guidance truncated -- read "
+                 + pathutil::toUtf8(file.filename()) + " for the rest]";
+    }
+    return content;
 }
 
 std::string build(const std::filesystem::path& projectRoot,
@@ -147,14 +186,28 @@ std::string build(const std::filesystem::path& projectRoot,
       << "- Dangerous system commands (shutdown, format, diskpart, regedit, takeown, etc.)\n"
       << "  are blocked and will not execute.\n";
 
-    // Keep project-specific knowledge out of the always-sent system prompt. The
-    // model can read this file when the task calls for local project context.
+    // Embed the project guidance file directly: models (DeepSeek especially)
+    // rarely spend a tool call reading it, so its conventions and build/test
+    // details are included up front. Capped so a huge file cannot crowd out
+    // the conversation; the truncation marker tells the model to read the
+    // rest itself. Deterministic for an unchanged file, so the prompt prefix
+    // stays provider-cache-friendly.
     if (auto guidanceFile = findProjectGuidanceFile(projectRoot)) {
         const std::string guidanceName = pathutil::toUtf8(guidanceFile->filename());
-        o << "\nProject guidance (" << guidanceName << "):\n"
-          << "- Read " << guidanceName
-          << " when you need project conventions, architecture, or build/test "
-          << "details for the current task.\n";
+        const std::string guidance = readGuidanceCapped(*guidanceFile);
+        if (!guidance.empty()) {
+            o << "\nProject guidance (" << guidanceName
+              << ") -- follow these instructions:\n"
+              << "---\n"
+              << guidance;
+            if (guidance.back() != '\n') o << "\n";
+            o << "---\n";
+        } else {
+            o << "\nProject guidance (" << guidanceName << "):\n"
+              << "- Read " << guidanceName
+              << " when you need project conventions, architecture, or build/test "
+              << "details for the current task.\n";
+        }
     }
 
     const std::string map = repomap::build(projectRoot);

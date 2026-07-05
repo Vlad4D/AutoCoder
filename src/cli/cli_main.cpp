@@ -3,7 +3,7 @@
 // Usage:
 //   autocoder_cli [--provider deepseek|claude] [--project <dir>]
 //                 [--model <id>] [--base-url <url>] [--max-iter <n>]
-//                 [--check "<command>"] [--auto-approve]
+//                 [--temperature <t>] [--check "<command>"] [--auto-approve]
 //                 [--metrics <file.json>] "<prompt>"
 //
 // API key: DEEPSEEK_API_KEY / ANTHROPIC_API_KEY env var if set, otherwise the
@@ -55,6 +55,8 @@ struct Args {
     QString checkCommand;
     QString metricsFile;
     int maxIter = 0;          // 0 = AgentRunner default
+    double temperature = -1.0; // <0 = unset; default resolved per provider below
+    bool temperatureSet = false;
     bool autoApprove = false;
     fs::path projectRoot = fs::current_path();
     bool valid = true;
@@ -90,6 +92,15 @@ Args parseArgs(const QStringList& args) {
                 a.error = "--max-iter expects a positive integer";
                 return a;
             }
+        } else if (s == "--temperature" && i + 1 < args.size()) {
+            bool ok = false;
+            a.temperature = args[++i].toDouble(&ok);
+            if (!ok || a.temperature < 0.0 || a.temperature > 2.0) {
+                a.valid = false;
+                a.error = "--temperature expects a number in [0, 2]";
+                return a;
+            }
+            a.temperatureSet = true;
         } else if (s == "--check" && i + 1 < args.size()) {
             a.checkCommand = args[++i];
         } else if (s == "--metrics" && i + 1 < args.size()) {
@@ -166,7 +177,7 @@ int main(int argc, char* argv[]) {
         cerr() << "Error: " << parsed.error << "\n"
                << "Usage: autocoder_cli [--provider deepseek|claude] [--project <dir>]\n"
                << "                     [--model <id>] [--base-url <url>] [--max-iter <n>]\n"
-               << "                     [--check \"<command>\"] [--auto-approve]\n"
+               << "                     [--temperature <t>] [--check \"<command>\"] [--auto-approve]\n"
                << "                     [--metrics <file.json>] \"<prompt>\"\n";
         return 2;
     }
@@ -331,6 +342,12 @@ int main(int argc, char* argv[]) {
         agent.setBaseUrl(QStringLiteral("https://api.anthropic.com"));
     }
     if (parsed.maxIter > 0) agent.setMaxIterations(parsed.maxIter);
+    // Default: deterministic sampling for DeepSeek coding runs (its API
+    // default of 1.0 is poor for code); Claude keeps its provider default.
+    if (parsed.temperatureSet)
+        agent.setTemperature(parsed.temperature);
+    else if (!useClaude)
+        agent.setTemperature(0.0);
     if (!parsed.checkCommand.isEmpty()) agent.setCheckCommand(parsed.checkCommand);
     agent.setProject(QString::fromUtf8(pathutil::toUtf8(parsed.projectRoot).c_str()));
     agent.submitUserMessage(parsed.prompt);

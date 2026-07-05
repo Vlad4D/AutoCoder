@@ -12,12 +12,15 @@ class QString;
 
 // On-disk JSON store for conversations, partitioned per project root.
 // Layout (resolved via QStandardPaths::AppDataLocation):
-//   %APPDATA%/AutoCoder/projects/<projectKey>/<id>.json
+//   <AppDataLocation>/projects/<projectKey>/<id>.json
+// On Windows with organization/app both set to "AutoCoder", Qt normally
+// resolves this as:
+//   %APPDATA%/AutoCoder/AutoCoder/projects/<projectKey>/<id>.json
 //
 // One file per conversation. The filename's `id` is also stored inside.
 //
 // Checkpoints are stored alongside each conversation in a subdirectory:
-//   %APPDATA%/AutoCoder/projects/<projectKey>/checkpoints/<convId>/
+//   <AppDataLocation>/projects/<projectKey>/checkpoints/<convId>/
 //       <turnIndex>.json
 //
 // Each checkpoint snapshot saves the conversation state and the file diffs

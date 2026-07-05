@@ -184,6 +184,8 @@ qt_add_executable(autocoder_tests
     src/cli/tests/test_highlight.cpp
     src/cli/tests/test_repomap.cpp
     src/cli/tests/test_llm_cache.cpp
+    src/cli/tests/test_llm_body.cpp
+    src/cli/tests/test_systemprompt.cpp
     src/cli/tests/test_autoverify.cpp
     src/cli/tests/test_shell.cpp
     src/cli/tests/test_image.cpp

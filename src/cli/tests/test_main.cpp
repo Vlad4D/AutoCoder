@@ -25,6 +25,8 @@ int main(int argc, char* argv[]) {
         { "highlight",  suite_highlight },
         { "repomap",    suite_repomap },
         { "llm_cache",  suite_llm_cache },
+        { "llm_body",   suite_llm_body },
+        { "systemprompt", suite_systemprompt },
         { "autoverify", suite_autoverify },
         { "shell",      suite_shell },
         { "image",      suite_image },

@@ -102,7 +102,166 @@ std::string resultSnippet(const std::string& content, size_t replaceStart,
     return o.str();
 }
 
+// ---- nearest-match diagnostics helpers ----
+
+std::vector<std::string> splitLinesLf(const std::string& s) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    while (start <= s.size()) {
+        const size_t nl = s.find('\n', start);
+        if (nl == std::string::npos) {
+            lines.push_back(s.substr(start));
+            break;
+        }
+        lines.push_back(s.substr(start, nl - start));
+        start = nl + 1;
+    }
+    // Treat a trailing newline as a terminator, not as an extra empty line,
+    // so "foo\n" compares as one line.
+    if (!lines.empty() && lines.back().empty()) lines.pop_back();
+    return lines;
+}
+
+std::string rtrimmed(const std::string& s) {
+    size_t e = s.size();
+    while (e > 0 && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r')) --e;
+    return s.substr(0, e);
+}
+
+// Collapse every whitespace run to a single space and trim both ends, so two
+// lines that differ only in indentation depth or tabs-vs-spaces compare equal.
+std::string wsCollapsed(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    bool inWs = true;  // leading whitespace is dropped
+    for (char c : s) {
+        if (c == ' ' || c == '\t' || c == '\r') {
+            if (!inWs) out.push_back(' ');
+            inWs = true;
+        } else {
+            out.push_back(c);
+            inWs = false;
+        }
+    }
+    if (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
 }  // namespace
+
+std::string EditTool::describeNearestMatch(const std::string& contentLf,
+                                           const std::string& oldStringLf) {
+    constexpr size_t kMaxContentBytes  = 2 * 1024 * 1024;
+    constexpr size_t kMaxNeedleLines   = 200;
+    constexpr size_t kMaxContentLines  = 50000;
+    constexpr size_t kMaxEchoLines     = 40;
+    constexpr size_t kMaxEchoLineChars = 200;      // this error is persisted in
+                                                   // the conversation forever --
+                                                   // never echo huge lines
+    constexpr size_t kMaxScanProduct   = 20000000; // hay lines x needle lines;
+                                                   // bounds the window scan
+
+    static const char* kReRead =
+        "Re-read the relevant region with `read` and retry with the exact text.";
+    static const char* kNoSimilar =
+        "No similar region found; the file may have changed since you read it. "
+        "Re-read it before retrying.";
+
+    if (contentLf.size() > kMaxContentBytes) return kReRead;
+
+    const std::vector<std::string> needle = splitLinesLf(oldStringLf);
+    const std::vector<std::string> hay = splitLinesLf(contentLf);
+    if (needle.empty() || hay.empty() || needle.size() > kMaxNeedleLines
+        || hay.size() > kMaxContentLines || needle.size() > hay.size()) {
+        return kReRead;
+    }
+    // Guard the O(hay * needle) window scan against pathological inputs (e.g.
+    // thousands of long, near-identical lines) that would otherwise stall the
+    // worker thread for seconds.
+    if (hay.size() * needle.size() > kMaxScanProduct) return kReRead;
+
+    // Pre-compute normalized forms once.
+    std::vector<std::string> needleRt, needleWs, hayRt, hayWs;
+    needleRt.reserve(needle.size());
+    needleWs.reserve(needle.size());
+    for (const std::string& l : needle) {
+        needleRt.push_back(rtrimmed(l));
+        needleWs.push_back(wsCollapsed(l));
+    }
+    hayRt.reserve(hay.size());
+    hayWs.reserve(hay.size());
+    for (const std::string& l : hay) {
+        hayRt.push_back(rtrimmed(l));
+        hayWs.push_back(wsCollapsed(l));
+    }
+
+    // Slide an L-line window over the file. Per line: 2 points when the line
+    // matches up to whitespace, 1 point when the collapsed needle line is
+    // contained in the collapsed file line (mid-line fragment).
+    const size_t L = needle.size();
+    size_t bestPos = 0, bestScore = 0;
+    for (size_t p = 0; p + L <= hay.size(); ++p) {
+        size_t score = 0;
+        for (size_t i = 0; i < L; ++i) {
+            const size_t h = p + i;
+            if (hay[h] == needle[i] || hayRt[h] == needleRt[i]
+                || hayWs[h] == needleWs[i]) {
+                score += 2;
+            } else if (!needleWs[i].empty()
+                       && hayWs[h].find(needleWs[i]) != std::string::npos) {
+                score += 1;
+            }
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestPos = p;
+        }
+    }
+
+    // Floor: fewer than half the lines resemble anything -> stale read.
+    if (bestScore < L) return kNoSimilar;
+
+    // Classify what distinguishes the best window from the needle.
+    bool allRtrimEq = true, allWsEq = true;
+    size_t matching = 0;
+    for (size_t i = 0; i < L; ++i) {
+        const size_t h = bestPos + i;
+        const bool rtEq = (hayRt[h] == needleRt[i]);
+        const bool wsEq = (hayWs[h] == needleWs[i]);
+        if (!rtEq) allRtrimEq = false;
+        if (!wsEq) allWsEq = false;
+        if (rtEq || wsEq) ++matching;
+    }
+
+    const size_t firstLine = bestPos + 1;                // 1-based
+    const size_t lastLine  = bestPos + L;
+    std::ostringstream o;
+    o << "Closest match at lines " << firstLine << "-" << lastLine;
+    if (allRtrimEq) {
+        o << " differs only in trailing whitespace.";
+    } else if (allWsEq) {
+        o << " differs only in whitespace/indentation (tabs vs spaces or "
+             "indent depth).";
+    } else {
+        o << " (" << matching << " of " << L << " line(s) match).";
+    }
+    o << " Retry with the exact text as it appears in the file:\n";
+
+    const size_t echo = std::min(L, kMaxEchoLines);
+    for (size_t i = 0; i < echo; ++i) {
+        const std::string& src = hay[bestPos + i];
+        o << bestPos + i + 1 << "\t";
+        if (src.size() > kMaxEchoLineChars) {
+            o << src.substr(0, kMaxEchoLineChars) << "[... +"
+              << (src.size() - kMaxEchoLineChars) << " chars]";
+        } else {
+            o << src;
+        }
+        o << "\n";
+    }
+    if (echo < L) o << "[... rest of the region not shown]\n";
+    return o.str();
+}
 
 json EditTool::schema() const {
     return {
@@ -186,7 +345,9 @@ ToolResult EditTool::execute(const json& args, ToolContext& ctx) {
 
     size_t first = content.find(oldStrNormalised);
     if (first == std::string::npos) {
-        return ToolResult::error("old_string not found in " + pathutil::toUtf8(path));
+        return ToolResult::error(
+            "old_string not found in " + pathutil::toUtf8(path) + ". "
+            + describeNearestMatch(content, oldStrNormalised));
     }
 
     size_t replacements = 0;
@@ -198,9 +359,23 @@ ToolResult EditTool::execute(const json& args, ToolContext& ctx) {
     } else {
         size_t second = content.find(oldStrNormalised, first + oldStrNormalised.size());
         if (second != std::string::npos) {
+            // Report the first few occurrence line numbers so the model can
+            // extend the surrounding context in one step.
+            std::string sites;
+            size_t pos = first, found = 0;
+            while (pos != std::string::npos && found < 5) {
+                const size_t line = 1 + static_cast<size_t>(std::count(
+                    content.begin(), content.begin() + static_cast<std::ptrdiff_t>(pos), '\n'));
+                if (!sites.empty()) sites += ", ";
+                sites += std::to_string(line);
+                ++found;
+                pos = content.find(oldStrNormalised, pos + oldStrNormalised.size());
+            }
+            if (pos != std::string::npos) sites += ", ...";
             return ToolResult::error(
                 "old_string occurs more than once in " + pathutil::toUtf8(path)
-                + "; pass replace_all=true or supply more surrounding context.");
+                + " (lines " + sites + "); pass replace_all=true or supply "
+                "more surrounding context to make the match unique.");
         }
         content.replace(first, oldStrNormalised.size(), newStrNormalised);
         replacements = 1;

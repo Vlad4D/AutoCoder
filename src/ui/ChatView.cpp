@@ -66,6 +66,20 @@ MessageWidget* ChatView::appendUser(const QString& text,
     return m;
 }
 
+void ChatView::setLastUserMessageRevert(std::function<void()> revertCb) {
+    // Walk backwards to the most recent user MessageWidget. The trailing
+    // stretch item is always last, so start at count() - 2.
+    for (int i = layout_->count() - 2; i >= 0; --i) {
+        auto* item = layout_->itemAt(i);
+        if (!item || !item->widget()) continue;
+        auto* m = qobject_cast<MessageWidget*>(item->widget());
+        if (m && m->role() == MessageWidget::Role::User) {
+            m->setRevertCallback(std::move(revertCb));
+            return;
+        }
+    }
+}
+
 MessageWidget* ChatView::beginAssistant() {
     activeAssistant_ = new MessageWidget(MessageWidget::Role::Assistant, container_);
     activeAssistant_->setWorkingDir(workingDir_);

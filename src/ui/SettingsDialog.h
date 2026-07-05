@@ -3,6 +3,7 @@
 #include <QDialog>
 
 class QComboBox;
+class QDoubleSpinBox;
 class QLineEdit;
 class QSpinBox;
 
@@ -21,6 +22,7 @@ public:
     static QString loadCheckCommand();     // QSettings -> empty (auto-verify off)
     static int     loadMaxContextTokens(); // QSettings -> 1048576
     static int     loadSendTokens();       // QSettings -> 16384
+    static double  loadTemperature();      // QSettings -> 0.0 (DeepSeek) / <0 = provider default (Claude)
     static int     loadFontSize();         // QSettings -> 12
 
     // Reasoning-guidance toggle (persisted; not part of the dialog form).
@@ -43,5 +45,6 @@ private:
     QLineEdit* checkCommandEdit_ = nullptr;
     QSpinBox*  maxContextTokensSpin_ = nullptr;
     QSpinBox*  sendTokensSpin_ = nullptr;
+    QDoubleSpinBox* temperatureSpin_ = nullptr;
     QSpinBox*  fontSizeSpin_ = nullptr;
 };

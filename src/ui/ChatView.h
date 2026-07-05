@@ -23,6 +23,12 @@ public:
     // bubble gets a "Revert to here" button.
     MessageWidget*  appendUser(const QString& text,
                                std::function<void()> revertCb = nullptr);
+
+    // Attach a revert callback to the most recently appended user message.
+    // Used by the two-phase send flow: the user bubble is shown immediately
+    // (no button), then the button is enabled once the checkpoint exists.
+    // No-op if there is no user message (e.g. the chat was cleared).
+    void            setLastUserMessageRevert(std::function<void()> revertCb);
     MessageWidget*  beginAssistant();
     void            appendToActiveAssistant(const QString& fragment);
     void            endAssistant();

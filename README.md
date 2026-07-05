@@ -144,7 +144,8 @@ Approvals are matched on the **entire** command string, so allowing `build.sh` c
 
 - Source: `src/` — `agent/`, `llm/`, `tools/` (incl. `tools/shell/`), `ui/`, `persistence/`, `diagnostics/`.
 - Settings (provider, API key location, model): platform-standard `QSettings` (Windows registry). API keys themselves are stored in the Windows Credential Manager (DPAPI-encrypted), not in plaintext.
-- Conversations: `%APPDATA%/AutoCoder/projects/<projectKey>/<uuid>.json`. Each project folder gets its own bucket.
+- Conversations: `<Qt AppDataLocation>/projects/<projectKey>/<uuid>.json`; on Windows desktop builds this is normally `%APPDATA%/AutoCoder/AutoCoder/projects/<projectKey>/<uuid>.json`. Each project folder gets its own bucket; `<projectKey>` is the first 32 hex chars of the SHA-1 of the weakly canonical project path. A conversation JSON stores `project_root`, `model`, `messages`, `approvals`, plus metadata such as `id`, `title`, `created_at`, and `updated_at`. New empty conversations live only in memory until the first user message is saved.
+- Conversation checkpoints: `<Qt AppDataLocation>/projects/<projectKey>/checkpoints/<conversationId>/<turnIndex>.json`, normally `%APPDATA%/AutoCoder/AutoCoder/projects/<projectKey>/checkpoints/<conversationId>/<turnIndex>.json` on Windows desktop builds. These power "Revert to here" and store the pre-turn conversation snapshot plus base64-encoded pre-images of files modified by that turn.
 - Crash logs: appended under the local app data folder, e.g. `%LOCALAPPDATA%/AutoCoder/AutoCoder/logs/crashes.log` (desktop) and `%LOCALAPPDATA%/AutoCoder/autocoder_cli/logs/crashes.log` (CLI). Logs include timestamps, app/Qt/OS metadata, C++ exception details, and on Windows the exception code, registers, and a best-effort stack trace.
 
 ## Limitations

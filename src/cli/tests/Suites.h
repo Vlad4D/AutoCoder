@@ -10,6 +10,8 @@ void suite_partial_reply();
 void suite_highlight();
 void suite_repomap();
 void suite_llm_cache();
+void suite_llm_body();
+void suite_systemprompt();
 void suite_autoverify();
 void suite_shell();
 void suite_image();

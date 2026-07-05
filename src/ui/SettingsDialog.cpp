@@ -4,6 +4,7 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFont>
 #include <QHBoxLayout>
@@ -26,6 +27,8 @@ const char* kClaudeModelKey    = "claude/model";
 const char* kClaudeBaseUrlKey  = "claude/baseUrl";
 const char* kClaudeMaxContextTokensKey = "claude/maxContextTokens";
 const char* kClaudeSendTokensKey = "claude/sendTokens";
+const char* kDeepSeekTemperatureKey = "deepseek/temperature";
+const char* kClaudeTemperatureKey   = "claude/temperature";
 const char* kMaxIterKey        = "agent/maxIterations";
 const char* kBashTimeoutKey    = "agent/bashTimeoutMs";
 const char* kCheckCommandKey   = "agent/checkCommand";
@@ -47,6 +50,11 @@ constexpr int kDefaultMaxContextTokens= 507904;
 constexpr int kDefaultClaudeMaxContextTokens = 500000;
 constexpr int kDefaultSendTokens      = 16384;
 constexpr int kDefaultFontSize        = 12;
+// DeepSeek's API default temperature is 1.0 -- far too high for coding; its
+// docs recommend 0.0 for coding/math. Claude's agentic default is fine, so
+// leave it at "provider default" (negative sentinel = omit from requests).
+constexpr double kDefaultDeepSeekTemperature = 0.0;
+constexpr double kProviderDefaultTemperature = -0.1;  // sentinel: omit field
 
 QString normalizedProvider(QString provider) {
     provider = provider.trimmed().toLower();
@@ -79,6 +87,14 @@ const char* maxContextTokensKeyFor(const QString& provider) {
 
 const char* sendTokensKeyFor(const QString& provider) {
     return isClaude(provider) ? kClaudeSendTokensKey : kSendTokensKey;
+}
+
+const char* temperatureKeyFor(const QString& provider) {
+    return isClaude(provider) ? kClaudeTemperatureKey : kDeepSeekTemperatureKey;
+}
+
+double defaultTemperatureFor(const QString& provider) {
+    return isClaude(provider) ? kProviderDefaultTemperature : kDefaultDeepSeekTemperature;
 }
 
 const char* defaultModelFor(const QString& provider) {
@@ -149,6 +165,11 @@ int loadMaxContextTokensForProvider(const QString& provider) {
 int loadSendTokensForProvider(const QString& provider) {
     QSettings s;
     return s.value(sendTokensKeyFor(provider), kDefaultSendTokens).toInt();
+}
+
+double loadTemperatureForProvider(const QString& provider) {
+    QSettings s;
+    return s.value(temperatureKeyFor(provider), defaultTemperatureFor(provider)).toDouble();
 }
 
 // One-time, per-provider notice about where data is processed, so consent is
@@ -235,6 +256,18 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     sendTokensSpin_->setSuffix(QStringLiteral(" tokens"));
     sendTokensSpin_->setValue(loadSendTokens());
 
+    temperatureSpin_ = new QDoubleSpinBox(this);
+    temperatureSpin_->setRange(kProviderDefaultTemperature,
+                               isClaude(loadProvider()) ? 1.0 : 2.0);
+    temperatureSpin_->setDecimals(1);
+    temperatureSpin_->setSingleStep(0.1);
+    temperatureSpin_->setSpecialValueText(QStringLiteral("provider default"));
+    temperatureSpin_->setValue(loadTemperature());
+    temperatureSpin_->setToolTip(QStringLiteral(
+        "Sampling temperature sent with every request.\n"
+        "0.0 = most deterministic (recommended for coding, especially DeepSeek).\n"
+        "Set to \"provider default\" to omit the parameter."));
+
     fontSizeSpin_ = new QSpinBox(this);
     fontSizeSpin_->setRange(8, 32);
     fontSizeSpin_->setSuffix(QStringLiteral(" pt"));
@@ -245,6 +278,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     form->addRow(QStringLiteral("API key"), apiKeyEdit_);
     form->addRow(QStringLiteral("Model"), modelCombo_);
     form->addRow(QStringLiteral("Base URL"), baseUrlEdit_);
+    form->addRow(QStringLiteral("Temperature"), temperatureSpin_);
     form->addRow(QStringLiteral("Max agent iterations"), maxIterSpin_);
     form->addRow(QStringLiteral("Default bash timeout"), bashTimeoutSpin_);
     form->addRow(QStringLiteral("Check command (auto-verify)"), checkCommandEdit_);
@@ -292,6 +326,15 @@ void SettingsDialog::refreshProviderFields(const QString& provider) {
         maxContextTokensSpin_->setValue(loadMaxContextTokensForProvider(provider));
     if (sendTokensSpin_)
         sendTokensSpin_->setValue(loadSendTokensForProvider(provider));
+    if (temperatureSpin_) {
+        // Anthropic's temperature range tops out at 1.0; DeepSeek/OpenAI at
+        // 2.0. Match the spin box so the UI can't offer a value the request
+        // would silently clamp away. Re-set the value after the range change,
+        // since setRange may have clipped it.
+        temperatureSpin_->setRange(kProviderDefaultTemperature,
+                                   isClaude(provider) ? 1.0 : 2.0);
+        temperatureSpin_->setValue(loadTemperatureForProvider(provider));
+    }
 }
 
 void SettingsDialog::resetModelChoices(const QString& provider, const QString& selectedModel) {
@@ -333,6 +376,7 @@ void SettingsDialog::onAccepted() {
     if (!isClaude(provider))
         s.setValue(kMaxContextMigratedKey, true);
     s.setValue(sendTokensKeyFor(provider), sendTokensSpin_->value());
+    s.setValue(temperatureKeyFor(provider), temperatureSpin_->value());
     s.setValue(kFontSizeKey,         fontSizeSpin_->value());
 
     maybeShowProviderDataNotice(this, provider);
@@ -377,6 +421,10 @@ int SettingsDialog::loadMaxContextTokens() {
 
 int SettingsDialog::loadSendTokens() {
     return loadSendTokensForProvider(loadProvider());
+}
+
+double SettingsDialog::loadTemperature() {
+    return loadTemperatureForProvider(loadProvider());
 }
 
 int SettingsDialog::loadFontSize() {

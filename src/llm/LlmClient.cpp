@@ -67,6 +67,32 @@ int usageInt(const json& usage, const char* key) {
         value, 0, std::numeric_limits<int>::max()));
 }
 
+// deepseek-reasoner (the thinking model) rejects or ignores sampling
+// parameters such as temperature/top_p; never send them to it.
+bool isDeepSeekReasonerModel(const QString& model) {
+    return model.startsWith(QStringLiteral("deepseek-reasoner"));
+}
+
+// Provider-documented output-token ceilings for known models. DeepSeek caps
+// deepseek-chat completions at 8K and deepseek-reasoner at 64K; values above
+// the cap are rejected by the API, so clamp rather than fail.
+int openAiMaxTokensCap(const QString& model) {
+    if (model.startsWith(QStringLiteral("deepseek-chat"))) return 8192;
+    if (isDeepSeekReasonerModel(model)) return 65536;
+    return 128000;
+}
+
+// Anthropic output-token ceilings. The Claude 3.x family caps completions at
+// 8K (3.5 Sonnet/Haiku) or 4K (3 Opus/Haiku); Claude 4 supports 64K. A value
+// above the model's cap is a 400, so clamp rather than let it fail.
+int claudeMaxTokensCap(const QString& model) {
+    if (model.startsWith(QStringLiteral("claude-3-opus"))) return 4096;
+    if (model.startsWith(QStringLiteral("claude-3-5"))
+        || model.startsWith(QStringLiteral("claude-3-7"))) return 8192;
+    if (model.startsWith(QStringLiteral("claude-3"))) return 4096;
+    return 64000;  // Claude 4.x and newer
+}
+
 int anthropicCacheCreationTokens(const json& usage) {
     int total = usageInt(usage, "cache_creation_input_tokens");
     if (usage.contains("cache_creation") && usage["cache_creation"].is_object()) {
@@ -93,6 +119,9 @@ void LlmClient::setBaseUrl(QString url) { baseUrl_ = std::move(url); }
 void LlmClient::setMaxTokens(int tokens) {
     if (tokens > 0) maxTokens_ = tokens;
 }
+void LlmClient::setTemperature(double t) {
+    temperature_ = t;  // negative = unset (omit from requests)
+}
 
 void LlmClient::sendOnce(json messages, json tools) {
     if (provider_ == QStringLiteral("claude")) {
@@ -118,9 +147,12 @@ json LlmClient::buildOpenAiBody(json messages, json tools, bool streaming) const
     json body = {
         {"model",    model_.toStdString()},
         {"messages", std::move(messages)},
-        {"max_tokens", std::clamp(maxTokens_, 1, 128000)},
+        {"max_tokens", std::clamp(maxTokens_, 1, openAiMaxTokensCap(model_))},
         {"stream",   streaming}
     };
+    if (temperature_ >= 0.0 && !isDeepSeekReasonerModel(model_)) {
+        body["temperature"] = std::clamp(temperature_, 0.0, 2.0);
+    }
     if (streaming) {
         body["stream_options"] = {{"include_usage", true}};
     }
@@ -135,9 +167,12 @@ json LlmClient::buildClaudeBody(json messages, json tools, bool streaming) const
     json body = {
         {"model", model_.toStdString()},
         {"messages", json::array()},
-        {"max_tokens", std::clamp(maxTokens_, 1, 128000)},
+        {"max_tokens", std::clamp(maxTokens_, 1, claudeMaxTokensCap(model_))},
         {"stream", streaming}
     };
+    if (temperature_ >= 0.0) {
+        body["temperature"] = std::clamp(temperature_, 0.0, 1.0);
+    }
 
     if (messages.is_array()) {
         for (size_t i = 0; i < messages.size(); ++i) {
@@ -352,7 +387,12 @@ void LlmClient::postChatCompletions(json body, bool streaming) {
                     streamUsage_ = json::object();
                     mergeAndEmitUsage(parsed["usage"]);
                 }
-                emit responseReceived(parsed["choices"][0]["message"]);
+                json message = parsed["choices"][0]["message"];
+                // deepseek-reasoner interleaves its chain of thought as
+                // reasoning_content; the API rejects it when sent back, so
+                // never let it into the stored conversation.
+                message.erase("reasoning_content");
+                emit responseReceived(std::move(message));
             } catch (const std::exception& e) {
                 emit errorOccurred(QStringLiteral("JSON parse failed: %1\n%2")
                                        .arg(e.what(), QString::fromUtf8(data)));
@@ -466,6 +506,10 @@ void LlmClient::processOpenAiSsePayload(const QByteArray& payload) {
     const json& choice = delta["choices"][0];
     if (!choice.contains("delta")) return;
     const json& d = choice["delta"];
+
+    // deepseek-reasoner streams its chain of thought as delta.reasoning_content.
+    // Deliberately discarded: it must never be accumulated into the assistant
+    // message (the API rejects reasoning_content when sent back).
 
     if (d.contains("content") && d["content"].is_string()) {
         std::string fragment = d["content"].get<std::string>();

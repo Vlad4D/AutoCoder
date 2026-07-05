@@ -87,6 +87,81 @@ void suite_edit_tools() {
                                         {"new_string", "z"}}, e.ctx)),
               "edit with no match is rejected");
 
+    // ---- edit: multiple-occurrence error reports the site line numbers ----
+    writeFile(root / "dup2.txt", "Q\na\nQ\nb\nQ\n");
+    CHECK(ok(readTool.execute(json{{"path", "dup2.txt"}}, e.ctx)));
+    {
+        ToolResult r = editTool.execute(json{{"path", "dup2.txt"}, {"old_string", "Q"},
+                                             {"new_string", "R"}}, e.ctx);
+        CHECK(!ok(r));
+        CHECK_MSG(r.content.find("lines 1, 3, 5") != std::string::npos,
+                  "ambiguous-edit error lists the occurrence line numbers");
+    }
+
+    // ---- edit: not-found error includes nearest-match diagnostics ----
+    writeFile(root / "near.txt",
+              "int main() {\n    do_work();\n    return 0;\n}\n");
+    CHECK(ok(readTool.execute(json{{"path", "near.txt"}}, e.ctx)));
+    {
+        // Wrong indentation depth -> named line range + indentation hint.
+        ToolResult r = editTool.execute(
+            json{{"path", "near.txt"},
+                 {"old_string", "  do_work();\n  return 0;"},
+                 {"new_string", "x"}}, e.ctx);
+        CHECK(!ok(r));
+        CHECK_MSG(r.content.find("Closest match at lines 2-3") != std::string::npos,
+                  "diagnostic names the closest line range");
+        CHECK_MSG(r.content.find("whitespace/indentation") != std::string::npos,
+                  "indentation-only difference is called out");
+        CHECK_MSG(r.content.find("    do_work();") != std::string::npos,
+                  "diagnostic echoes the file's actual text to copy from");
+    }
+    {
+        // Garbage old_string -> stale-read advice, no bogus region.
+        ToolResult r = editTool.execute(
+            json{{"path", "near.txt"},
+                 {"old_string", "zzz qqq\nvvv www\nnnn mmm"},
+                 {"new_string", "x"}}, e.ctx);
+        CHECK(!ok(r));
+        CHECK_MSG(r.content.find("No similar region found") != std::string::npos,
+                  "dissimilar old_string yields the stale-read hint");
+    }
+
+    // ---- describeNearestMatch: pure-function edge cases ----
+    {
+        // Trailing-whitespace-only difference detected.
+        const std::string hint = EditTool::describeNearestMatch(
+            "keep\nvalue = 1;  \nend\n", "value = 1;");
+        CHECK_MSG(hint.find("trailing whitespace") != std::string::npos,
+                  "trailing-whitespace-only diff detected");
+        CHECK_MSG(hint.find("lines 2-2") != std::string::npos,
+                  "single-line window located correctly");
+
+        // Partial (mid-line) fragment still finds its region.
+        const std::string hint2 = EditTool::describeNearestMatch(
+            "a\nresult = compute(alpha, beta);\nb\n", "compute(alpha, beta)");
+        CHECK_MSG(hint2.find("lines 2-2") != std::string::npos,
+                  "mid-line fragment locates the containing line");
+
+        // Empty needle / degenerate input never throws.
+        CHECK(!EditTool::describeNearestMatch("abc\n", "").empty());
+        CHECK(!EditTool::describeNearestMatch("", "abc").empty());
+
+        // A giant matching line is truncated so the (persisted) error stays
+        // small -- a minified/one-line file must not inject megabytes. The
+        // needle appears inside the giant line, so it is the best match.
+        {
+            const std::string giant = std::string(25000, 'x')
+                + " unique_token_xyz " + std::string(25000, 'x');
+            const std::string hint = EditTool::describeNearestMatch(
+                giant + "\n", "unique_token_xyz");
+            CHECK_MSG(hint.size() < 2000,
+                      "diagnostic stays small even against a 50 KB line");
+            CHECK_MSG(hint.find("[... +") != std::string::npos,
+                      "oversized echoed line is truncated with a marker");
+        }
+    }
+
     writeFile(root / "unread.txt", "data");
     CHECK_MSG(!ok(editTool.execute(json{{"path", "unread.txt"}, {"old_string", "data"},
                                         {"new_string", "x"}}, e.ctx)),

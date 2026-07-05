@@ -34,6 +34,7 @@ signals:
     void requestSetCheckCommand(QString cmd);
     void requestSetMaxContextTokens(int tokens);
     void requestSetSendTokens(int tokens);
+    void requestSetTemperature(double t);
     void requestSetReasoningGuidance(bool enabled);
     void requestSetProject(QString rootPath);
     void requestNewConversation();
@@ -63,6 +64,7 @@ private slots:
     void onConversationReplayProgress(int messagesDone, int totalMessages);
     void onConversationReplayFinished();
     void onUserMessageAdded(const QString& text, bool canRevert, int turnIndex);
+    void onUserMessageRevertReady(const QString& convId, int turnIndex);
     void onAssistantTextDelta(const QString& fragment);
     void onAssistantTextFinalized();
     void onToolCallStarted(const QString& name, const QString& argsJson);
@@ -131,6 +133,9 @@ private:
     // Track turn indices so we can show a revert button on each user message.
     // Incremented each time onUserMessageAdded fires.
     int currentTurnIndex_ = 0;
+    // The text of the most recently added user message, used by
+    // onUserMessageRevertReady to populate the revert callback's draft.
+    QString lastUserMessageText_;
 
     // Track context usage percentage so we can suggest /compact
     // when the conversation gets large. Updated by onContextStats().

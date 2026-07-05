@@ -34,7 +34,7 @@ build\default\Debug\autocoder_tests.exe          # all suites
 build\default\Debug\autocoder_tests.exe paths    # single suite by name
 ```
 
-Suites live in `src/cli/tests/` as `test_*.cpp` (paths, store, edit_tools, policy, revert_e2e, highlight, repomap, llm_cache, autoverify, shell, image, debugrunner), registered in `test_main.cpp` with the minimal harness in `TestHarness.h`. Add a new suite by adding its `.cpp` to the `autocoder_tests` target in `CMakeLists.txt` and registering it in `test_main.cpp`.
+Suites live in `src/cli/tests/` as `test_*.cpp` (paths, store, edit_tools, policy, revert_e2e, highlight, repomap, llm_cache, llm_body, systemprompt, autoverify, shell, image, debugrunner), registered in `test_main.cpp` with the minimal harness in `TestHarness.h`. Add a new suite by adding its `.cpp` to the `autocoder_tests` target in `CMakeLists.txt` and registering it in `test_main.cpp`.
 
 **Headless CLI** for scripting/debugging the agent against a live API:
 

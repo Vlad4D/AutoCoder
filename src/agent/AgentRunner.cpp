@@ -181,6 +181,10 @@ void AgentRunner::setSendTokens(int tokens) {
     }
 }
 
+void AgentRunner::setTemperature(double t) {
+    if (client_) client_->setTemperature(t);
+}
+
 void AgentRunner::deleteConversation(QString id) {
     bool wasCurrent = (currentConvId_ == id.toStdString());
     store_.removeCheckpoints(projectRoot_, id.toStdString());
@@ -479,20 +483,40 @@ void AgentRunner::submitUserMessage(QString text) {
 
     const std::string userText = text.toStdString();
 
-    // Persist a real conversation as soon as a user turn starts. Fresh
-    // conversations build the system prompt lazily, but without it a single
-    // user message is skipped by saveCurrent() and an early cancel leaves only
-    // an orphan checkpoint.
+    // Echo the user's message to the UI immediately -- everything below
+    // (system prompt / repo map build, checkpoint I/O) can take seconds on
+    // the first message of a conversation, and the chat must not sit empty
+    // while that runs. The revert button is enabled later via
+    // userMessageRevertReady once the checkpoint exists.
+    emit userMessageAdded(text, false, -1);
+
+    // Build the system prompt (repo map walk) BEFORE snapshotting the
+    // pre-message state, so checkpoints always contain the current system
+    // prompt: reverting must never resurrect a stale prompt (the refresh
+    // flag is consumed here), and turn-0 checkpoints must not be empty.
+    // It is also required before saveCurrent(), which skips conversations
+    // with a single message.
     ensureSystemPrompt();
 
-    // Take a checkpoint before adding the user message so reverting to this
-    // turn restores the conversation to the state before the message was sent.
-    const int turnForMessage = takeCheckpoint(userText);
+    // Snapshot the conversation before adding the user message, so the
+    // checkpoint restores the state from before the message was sent.
+    json messagesBeforeUser = conv_.messages();
 
     conv_.addUser(userText);
-    saveCurrent();
 
-    emit userMessageAdded(text, turnForMessage >= 0, turnForMessage);
+    const int turnForMessage =
+        takeCheckpoint(userText, std::move(messagesBeforeUser));
+
+    // Enable the revert button on the already-emitted user message now that
+    // the checkpoint exists. The conversation id travels with the signal so
+    // the UI cannot wire the button to a different conversation the user
+    // switched to in the meantime.
+    if (turnForMessage >= 0) {
+        emit userMessageRevertReady(QString::fromStdString(currentConvId_),
+                                    turnForMessage);
+    }
+
+    saveCurrent();
     emitContextStats();
 
     sendToLlm();
@@ -845,14 +869,15 @@ void AgentRunner::onCompactResponse(json msg, size_t splitIndex) {
     // Rebuild conversation: system prompt + compact summary as user message + kept part.
     json newMessages = json::array();
 
+    // The rebuilt system prompt already embeds the project guidance file
+    // (SystemPrompt::build). Do NOT prepend it again here -- the compacted
+    // conversation must not carry a second, larger copy of the same guidance,
+    // which would re-inflate exactly the context compaction just reduced. (The
+    // compactor *request* still includes a guidance snapshot so the summarizer
+    // sees the rules; that request is transient and not persisted.)
     newMessages.push_back(currentSystemMessage(projectRoot_));
 
-    std::string compactContent = "[Previous conversation compacted]\n\n";
-    if (auto guidanceSnapshot = buildGuidanceSnapshot(projectRoot_)) {
-        compactContent += *guidanceSnapshot;
-        compactContent += "\n\n";
-    }
-    compactContent += summary;
+    std::string compactContent = "[Previous conversation compacted]\n\n" + summary;
 
     // Add the compact summary as a user message.
     newMessages.push_back({
@@ -986,7 +1011,8 @@ void AgentRunner::onCompactResponse(json msg, size_t splitIndex) {
     }
 }
 
-int AgentRunner::takeCheckpoint(const std::string& userMessage) {
+int AgentRunner::takeCheckpoint(const std::string& userMessage,
+                                nlohmann::json messagesBeforeUser) {
     if (currentConvId_.empty()) return -1;
 
     // Backstop: persist the just-finished turn's snapshots into ITS OWN
@@ -1009,7 +1035,11 @@ int AgentRunner::takeCheckpoint(const std::string& userMessage) {
     ConversationStore::Checkpoint cp;
     cp.turnIndex           = turnIndex_++;
     cp.userMessage         = userMessage;
-    cp.conversationMessages = conv_.messages();
+    // Use the pre-user-message state if provided, so reverting restores the
+    // conversation to before the user's message was added.
+    cp.conversationMessages = messagesBeforeUser.is_null()
+                                  ? conv_.messages()
+                                  : std::move(messagesBeforeUser);
 
     fileBeforeSnapshots_.clear();
     fileChangeWarned_ = false;  // reset the per-turn many-files warning
@@ -1093,9 +1123,13 @@ int AgentRunner::beginTurnForTest(const QString& userMessage) {
     running_.store(true);
     iter_ = 0;
     checkAttemptsThisTurn_ = 0;
+    // Mirror submitUserMessage's ordering exactly: build the prompt, snapshot
+    // the pre-message state, add the message, checkpoint the snapshot.
     ensureSystemPrompt();
-    const int turn = takeCheckpoint(userMessage.toStdString());
+    json messagesBeforeUser = conv_.messages();
     conv_.addUser(userMessage.toStdString());
+    const int turn = takeCheckpoint(userMessage.toStdString(),
+                                    std::move(messagesBeforeUser));
     saveCurrent();
     return turn;
 }
@@ -1211,7 +1245,12 @@ void AgentRunner::revertToCheckpoint(QString convId, int targetTurn) {
                 .arg(QString::fromStdString(failed)));
         }
 
-        // 2. Restore the conversation state.
+        // 2. Restore the conversation state. Reverting also makes the target
+        // conversation current: the checkpoint may belong to a conversation
+        // the user has since switched away from, and every later save must
+        // go to the conversation actually being displayed after the replay
+        // below -- not to whichever one happened to be loaded.
+        currentConvId_ = convIdStr;
         cancelled_.store(false);
         running_.store(false);
         inAssistantTextRun_ = false;
@@ -1360,15 +1399,31 @@ void AgentRunner::revertToCheckpoint(QString convId, int targetTurn) {
 }
 
 void AgentRunner::ensureSystemPrompt() {
-    if (!systemPromptNeedsRefresh_) return;
     // The conversation might already have a system prompt from loadConversation().
-    // Only rebuild if it's missing or stale.
+    // Rebuild when it is flagged stale OR missing entirely -- the latter happens
+    // after reverting to a turn-0 checkpoint, whose message snapshot predates
+    // the lazily-built system prompt.
     const auto& msgs = conv_.messages();
-    bool hasSystem = !msgs.empty() && msgs[0].value("role", "") == "system";
-    if (!hasSystem || systemPromptNeedsRefresh_) {
-        conv_.setSystemPrompt(SystemPrompt::build(projectRoot_, reasoningGuidanceEnabled_));
+    const bool hasSystem = !msgs.empty() && msgs[0].value("role", "") == "system";
+    if (hasSystem && !systemPromptNeedsRefresh_) return;
+    emit systemPromptBuildStarted();
+    std::string prompt;
+    try {
+        prompt = SystemPrompt::build(projectRoot_, reasoningGuidanceEnabled_);
+    } catch (...) {
+        prompt.clear();
     }
+    if (prompt.empty()) {
+        // Degraded fallback on a build failure: a minimal prompt beats
+        // sending the conversation with no system message at all -- and the
+        // started/finished signal pair stays balanced for the UI.
+        prompt = "You are AutoCoder, a coding agent that helps the user "
+                 "build and modify software projects.";
+    }
+    const int promptBytes = static_cast<int>(prompt.size());
+    conv_.setSystemPrompt(std::move(prompt));
     systemPromptNeedsRefresh_ = false;
+    emit systemPromptBuildFinished(promptBytes);
 }
 
 void AgentRunner::sendToLlm() {

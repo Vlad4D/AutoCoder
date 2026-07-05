@@ -135,6 +135,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(this, &MainWindow::requestSetCheckCommand,    agent_, &AgentRunner::setCheckCommand);
     connect(this, &MainWindow::requestSetMaxContextTokens,agent_, &AgentRunner::setMaxContextTokens);
     connect(this, &MainWindow::requestSetSendTokens,      agent_, &AgentRunner::setSendTokens);
+    connect(this, &MainWindow::requestSetTemperature,     agent_, &AgentRunner::setTemperature);
     connect(this, &MainWindow::requestSetReasoningGuidance, agent_, &AgentRunner::setReasoningGuidance);
     connect(this, &MainWindow::requestSetProject,         agent_, &AgentRunner::setProject);
     connect(this, &MainWindow::requestNewConversation,    agent_, &AgentRunner::newConversation);
@@ -164,6 +165,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(agent_, &AgentRunner::conversationReplayFinished,
             this, &MainWindow::onConversationReplayFinished);
     connect(agent_, &AgentRunner::userMessageAdded,       this, &MainWindow::onUserMessageAdded);
+    connect(agent_, &AgentRunner::userMessageRevertReady, this, &MainWindow::onUserMessageRevertReady);
     connect(agent_, &AgentRunner::assistantTextDelta,     this, &MainWindow::onAssistantTextDelta);
     connect(agent_, &AgentRunner::assistantTextFinalized, this, &MainWindow::onAssistantTextFinalized);
     connect(agent_, &AgentRunner::toolCallStarted,        this, &MainWindow::onToolCallStarted);
@@ -180,6 +182,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         statusBar()->showMessage(
             QStringLiteral("Connection dropped — retrying (%1/%2)…").arg(attempt).arg(maxAttempts),
             8000);
+    });
+    // Transient notice while the system prompt / repo map is (re)built --
+    // on large projects the tree walk + symbol extraction takes a moment,
+    // and this explains the pause after the first message of a conversation.
+    connect(agent_, &AgentRunner::systemPromptBuildStarted, this, [this]() {
+        statusBar()->showMessage(
+            QStringLiteral("Scanning project (repo map + system prompt)..."));
+    });
+    connect(agent_, &AgentRunner::systemPromptBuildFinished, this, [this](int promptBytes) {
+        // The build only happens mid-turn (submitUserMessage), so restore a
+        // *persistent* working message rather than a timed one -- a timed
+        // message would leave the status bar blank for the rest of the turn
+        // (QStatusBar has no message stack). Fold in the map size for feedback.
+        statusBar()->showMessage(
+            QStringLiteral("Working... (project map: %1 KB)")
+                .arg((promptBytes + 1023) / 1024));
     });
     connect(agent_, &AgentRunner::manyFilesChanged, this, [this](int count) {
         statusBar()->showMessage(
@@ -343,6 +361,7 @@ void MainWindow::pushSettingsToAgent() {
     reservedSendTokens_ = SettingsDialog::loadSendTokens();
     emit requestSetMaxContextTokens(maxContextTokens_);
     emit requestSetSendTokens(reservedSendTokens_);
+    emit requestSetTemperature(SettingsDialog::loadTemperature());
     emit requestSetReasoningGuidance(SettingsDialog::loadReasoningGuidance());
 }
 
@@ -558,8 +577,38 @@ void MainWindow::onUserMessageAdded(const QString& text, bool canRevert, int tur
 
     chat_->appendUser(text, std::move(revertCb));
 
+    lastUserMessageText_ = text;
     input_->pushHistory(text);
     saveLastConversationId();
+}
+
+void MainWindow::onUserMessageRevertReady(const QString& convId, int turnIndex) {
+    // The user message was already added to the chat (via onUserMessageAdded
+    // with canRevert=false). Now that the checkpoint is ready, enable the
+    // revert button on that message. The conversation id comes from the
+    // agent (not from currentConversationId_): the user may have switched
+    // conversations during the system-prompt build, and the button must
+    // never revert a different conversation's files.
+    const QString convIdAtMessage = convId;
+    const QString text = lastUserMessageText_;
+    chat_->setLastUserMessageRevert([this, convIdAtMessage, turnIndex, text]() {
+        // Confirmation dialog.
+        auto reply = QMessageBox::question(
+            this,
+            QStringLiteral("Revert conversation"),
+            QStringLiteral(
+                "This will restore the conversation and all modified files to the "
+                "state they were in before this message was sent.\n\n"
+                "Any subsequent messages and file changes will be lost.\n\n"
+                "Note: this reverts in-folder file changes only. It cannot undo shell "
+                "side effects such as pushed commits, deleted external files, network "
+                "calls, or spent API credits. Continue?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (reply != QMessageBox::Yes) return;
+        emit requestRevertToCheckpoint(convIdAtMessage, turnIndex);
+        input_->setDraft(text);
+    });
 }
 
 void MainWindow::onAssistantTextDelta(const QString& fragment) {

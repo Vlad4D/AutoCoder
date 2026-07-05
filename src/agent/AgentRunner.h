@@ -94,6 +94,8 @@ public slots:
     void setDefaultBashTimeoutMs(int ms);
     void setMaxContextTokens(int tokens);
     void setSendTokens(int tokens);
+    // Sampling temperature for LLM requests. Negative = provider default.
+    void setTemperature(double t);
     // Auto-verify: shell command run after a turn that modified files (empty =
     // disabled). On failure the output is fed back to the model to fix.
     void setCheckCommand(QString cmd);
@@ -169,6 +171,12 @@ signals:
     void conversationReplayHistoryHidden(int hiddenMessages);
     void conversationReplayFinished();
     void userMessageAdded(QString text, bool canRevert, int turnIndex);
+    // Emitted after the initial userMessageAdded (with canRevert=false) once
+    // the checkpoint is ready, so the UI can enable the revert button.
+    // Carries the owning conversation id: delivery can lag message-add by
+    // seconds (system prompt build), during which the user may have switched
+    // conversations -- the button must never be wired to the wrong one.
+    void userMessageRevertReady(QString convId, int turnIndex);
     void assistantTextDelta(QString fragment);
     void assistantTextFinalized();
     void toolCallStarted(QString name, QString argsJson);
@@ -178,6 +186,11 @@ signals:
     void errorOccurred(QString detail);
 
     // ----- Status / sidebar -----
+    // Emitted around a system-prompt (re)build. The repo map walk + symbol
+    // extraction can take seconds on large projects, so the UI shows why the
+    // first message of a conversation pauses before the LLM request starts.
+    void systemPromptBuildStarted();
+    void systemPromptBuildFinished(int promptBytes);
     void contextStats(int messageCount, int approxTokens, int bytesTotal);
     void tokenUsageStats(int cachedInputTokens, int uncachedInputTokens,
                          int outputTokens, int totalTokens);
@@ -257,7 +270,11 @@ private:
     void emitContextStats();
     void emitConversationsList();
     void saveCurrent();
-    int takeCheckpoint(const std::string& userMessage);
+    // messagesBeforeUser: the conversation state to checkpoint (pre-user-
+    // message). Null (default) checkpoints the current conversation as-is.
+    // Taken by value so callers can std::move a snapshot in.
+    int takeCheckpoint(const std::string& userMessage,
+                       nlohmann::json messagesBeforeUser = nullptr);
     std::map<size_t, int> buildReplayUserTurnMap(const std::vector<int>& turns,
                                                  const std::string& convId) const;
     void repairOrphanedToolCalls();
